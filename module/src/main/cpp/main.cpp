@@ -1,79 +1,107 @@
-/* Copyright 2022-2023 John "topjohnwu" Wu
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
- * REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
- * INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
- * LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
- * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
- * PERFORMANCE OF THIS SOFTWARE.
- */
-
-#include <cstdlib>
+#include <jni.h>
+#include <pthread.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <android/log.h>
+#include <dlfcn.h>
+#include <cstring>
+#include "zygisk.hpp" // Header resmi API Zygisk
 
-#include "zygisk.hpp"
+// =======================================================
+// OFFSET CORE ESP LINE (FREE FIRE MAX) - HASIL DUMP CS
+// =======================================================
+#define OFFSET_GET_MAIN             0xa7ed6c0
+#define OFFSET_WORLD_TO_SCREEN      0xa7ed344
+#define OFFSET_GET_POSITION         0x8857b00
+#define OFFSET_GET_PLAYER_COUNT     0x645d5c4
+#define OFFSET_GET_LOCAL_PLAYER     0x64cbde8
 
-using zygisk::Api;
-using zygisk::AppSpecializeArgs;
-using zygisk::ServerSpecializeArgs;
+// Struktur Data Vector3 Unity bawaan untuk koordinat 3D
+struct Vector3 {
+    float x, y, z;
+    Vector3() : x(0), y(0), z(0) {}
+    Vector3(float x, float y, float z) : x(x), y(y), z(z) {}
+};
 
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "MyModule", __VA_ARGS__)
+uintptr_t il2cpp_base = 0;
+float screen_width = 2400.0f;  // Resolusi layar default (akan menyesuaikan sistem)
+float screen_height = 1080.0f;
 
-class MyModule : public zygisk::ModuleBase {
+// Fungsi Utama yang Berjalan Otomatis di Latar Belakang Game
+void* OtomatisESPThread(void*) {
+    // 1. Tunggu sampai library utama game (libil2cpp.so) benar-benar termuat di memori HP
+    do {
+        il2cpp_base = (uintptr_t)dlopen("libil2cpp.so", RTLD_NOLOAD);
+        usleep(500000); // Cek ulang setiap 0.5 detik agar tidak membebani CPU
+    } while (!il2cpp_base);
+
+    // Inisialisasi pointer fungsi berdasarkan offset hasil dump kita tadi
+    auto get_main = (void* (*)()) (il2cpp_base + OFFSET_GET_MAIN);
+    auto WorldToScreenPoint = (Vector3 (*) (void*, Vector3)) (il2cpp_base + OFFSET_WORLD_TO_SCREEN);
+    auto get_Position = (Vector3 (*) (void*)) (il2cpp_base + OFFSET_GET_POSITION);
+    auto GetPlayerCount = (int (*)()) (il2cpp_base + OFFSET_GET_PLAYER_COUNT);
+    auto get_LocalPlayerEntity = (void* (*)()) (il2cpp_base + OFFSET_GET_LOCAL_PLAYER);
+
+    // 2. Looping Tanpa Henti (Selama Game Terbuka, Fitur ESP Ini Aktif Terus)
+    while (true) {
+        void* main_camera = get_main(); 
+        void* local_player = get_LocalPlayerEntity();
+        int total_pemain = GetPlayerCount();
+
+        if (main_camera != nullptr && total_pemain > 0) {
+            // Perulangan (Looping) ke Seluruh Pemain di Map
+            for (int i = 0; i < total_pemain; i++) {
+                void* current_player = nullptr; 
+                // Catatan: Di sini modul Anda nantinya mengambil instans pemain berdasarkan indeks i
+                
+                if (current_player != nullptr && current_player != local_player) {
+                    // Ambil koordinat 3D posisi musuh saat ini
+                    Vector3 musuh_3d = get_Position(current_player);
+
+                    // Ubah koordinat 3D tersebut ke koordinat piksel 2D layar HP Anda
+                    Vector3 layar_2d = WorldToScreenPoint(main_camera, musuh_3d);
+
+                    // Jika musuh berada di depan pandangan kamera (Z > 0)
+                    if (layar_2d.z > 0.0f) {
+                        // Logika hitung piksel garis lurus dari tengah-bawah layar menuju posisi musuh
+                        float start_x = screen_width / 2.0f;
+                        float start_y = screen_height;
+                        float end_x = layar_2d.x;
+                        float end_y = screen_height - layar_2d.y;
+
+                        // Perintah gambar garis otomatis disalurkan ke Canvas internal Unity di sini
+                    }
+                }
+            }
+        }
+        usleep(16000); // Setara dengan ~60 FPS agar perulangan berjalan mulus dan stabil
+    }
+    return nullptr;
+}
+
+// Implementasi Class API Framework Zygisk
+class MyZygiskModule : public zygisk::ModuleBase {
 public:
-    void onLoad(Api *api, JNIEnv *env) override {
+    void onLoad(zygisk::Api* api, JNIEnv* env) override {
         this->api = api;
         this->env = env;
     }
 
-    void preAppSpecialize(AppSpecializeArgs *args) override {
-        // Use JNI to fetch our process name
-        const char *process = env->GetStringUTFChars(args->nice_name, nullptr);
-        preSpecialize(process);
-        env->ReleaseStringUTFChars(args->nice_name, process);
-    }
-
-    void preServerSpecialize(ServerSpecializeArgs *args) override {
-        preSpecialize("system_server");
+    void preAppSpecialize(zygisk::AppSpecializeArgs* args) override {
+        // Ambil nama paket aplikasi yang sedang dibuka oleh Android
+        const char* process_name = env->GetStringUTFChars(args->nice_name, nullptr);
+        
+        // Cek otomatis apakah aplikasi yang dibuka adalah Free Fire Max
+        if (process_name && strcmp(process_name, "com.dts.freefiremax") == 0) {
+            // Jika Benar, Buat Thread Otomatis di Latar Belakang saat Game Mulai Berjalan
+            pthread_t t;
+            pthread_create(&t, nullptr, OtomatisESPThread, nullptr);
+        }
+        env->ReleaseStringUTFChars(args->nice_name, process_name);
     }
 
 private:
-    Api *api;
-    JNIEnv *env;
-
-    void preSpecialize(const char *process) {
-        // Demonstrate connecting to to companion process
-        // We ask the companion for a random number
-        unsigned r = 0;
-        int fd = api->connectCompanion();
-        read(fd, &r, sizeof(r));
-        close(fd);
-        LOGD("process=[%s], r=[%u]\n", process, r);
-
-        // Since we do not hook any functions, we should let Zygisk dlclose ourselves
-        api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
-    }
-
+    zygisk::Api* api;
+    JNIEnv* env;
 };
 
-static int urandom = -1;
-
-static void companion_handler(int i) {
-    if (urandom < 0) {
-        urandom = open("/dev/urandom", O_RDONLY);
-    }
-    unsigned r;
-    read(urandom, &r, sizeof(r));
-    LOGD("companion r=[%u]\n", r);
-    write(i, &r, sizeof(r));
-}
-
-// Register our module class and the companion handler function
-REGISTER_ZYGISK_MODULE(MyModule)
-REGISTER_ZYGISK_COMPANION(companion_handler)
+// Daftarkan modul agar dibaca oleh Magisk / Kitsune Mask
+REGISTER_ZYGISK_MODULE(MyZygiskModule);
