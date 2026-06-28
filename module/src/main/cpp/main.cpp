@@ -42,37 +42,49 @@ void* OtomatisESPThread(void*) {
 
     // 2. Looping Tanpa Henti (Selama Game Terbuka, Fitur ESP Ini Aktif Terus)
     while (true) {
+        // PENGAMAN 1: Pastikan pointer fungsi dasar tidak kosong sebelum dieksekusi
+        if (get_main == nullptr || GetPlayerCount == nullptr || get_LocalPlayerEntity == nullptr) {
+            usleep(100000);
+            continue;
+        }
+
         void* main_camera = get_main(); 
         void* local_player = get_LocalPlayerEntity();
         int total_pemain = GetPlayerCount();
 
-        if (main_camera != nullptr && total_pemain > 0) {
+        // PENGAMAN 2: Hanya jalankan logika jika kamera game dan data player sudah siap di room/match
+        if (main_camera != nullptr && total_pemain > 0 && local_player != nullptr) {
+            
             // Perulangan (Looping) ke Seluruh Pemain di Map
             for (int i = 0; i < total_pemain; i++) {
                 void* current_player = nullptr; 
                 // Catatan: Di sini modul Anda nantinya mengambil instans pemain berdasarkan indeks i
                 
+                // PENGAMAN 3: Skrip tidak boleh membaca jika objek current_player masih bernilai NULL (Pemicu Utama Game FC)
                 if (current_player != nullptr && current_player != local_player) {
-                    // Ambil koordinat 3D posisi musuh saat ini
-                    Vector3 musuh_3d = get_Position(current_player);
+                    
+                    if (get_Position != nullptr && WorldToScreenPoint != nullptr) {
+                        // Ambil koordinat 3D posisi musuh saat ini
+                        Vector3 musuh_3d = get_Position(current_player);
 
-                    // Ubah koordinat 3D tersebut ke koordinat piksel 2D layar HP Anda
-                    Vector3 layar_2d = WorldToScreenPoint(main_camera, musuh_3d);
+                        // Ubah koordinat 3D tersebut ke koordinat piksel 2D layar HP Anda
+                        Vector3 layar_2d = WorldToScreenPoint(main_camera, musuh_3d);
 
-                    // Jika musuh berada di depan pandangan kamera (Z > 0)
-                    if (layar_2d.z > 0.0f) {
-                        // Logika hitung piksel garis lurus dari tengah-bawah layar menuju posisi musuh
-                        float start_x = screen_width / 2.0f;
-                        float start_y = screen_height;
-                        float end_x = layar_2d.x;
-                        float end_y = screen_height - layar_2d.y;
+                        // Jika musuh berada di depan pandangan kamera (Z > 0)
+                        if (layar_2d.z > 0.0f) {
+                            // Logika hitung piksel garis lurus dari tengah-bawah layar menuju posisi musuh
+                            float start_x = screen_width / 2.0f;
+                            float start_y = screen_height;
+                            float end_x = layar_2d.x;
+                            float end_y = screen_height - layar_2d.y;
 
-                        // Perintah gambar garis otomatis disalurkan ke Canvas internal Unity di sini
+                            // Perintah gambar garis otomatis disalurkan ke Canvas internal Unity di sini
+                        }
                     }
                 }
             }
         }
-        usleep(16000); // Setara dengan ~60 FPS agar perulangan berjalan mulus dan stabil
+        usleep(32000); // Naikkan jeda waktu ke 32ms (~30 FPS) saat masa uji coba agar lebih stabil di latar belakang
     }
     return nullptr;
 }
