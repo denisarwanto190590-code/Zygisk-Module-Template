@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <cstring>
+#include <string.h>
+#include <stdlib.h>
 #include <android/log.h>
 #include "zygisk.hpp"
 
@@ -25,7 +27,7 @@ struct MonoArray {
     void* monitor;
     void* bounds;
     int max_length;
-    void* vector; 
+    void* vector[0]; // Diperbaiki agar compiler mengizinkan pembacaan indeks array [i]
 };
 
 uintptr_t il2cpp_base = 0;
@@ -59,7 +61,6 @@ uintptr_t dapatkan_base_memori() {
 void GambarGarisESP(float x1, float y1, float x2, float y2) {
     // Trik Zygisk: Kita salurkan titik koordinat ini ke logcat sistem atau canvas overlay.
     // Jika template kamu sudah mendukung fungsi Canvas, panggil fungsinya di sini.
-    // Contoh: ImGui::GetBackgroundDrawList()->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), 0xFFFFFFFF, 2.0f);
     __android_log_print(ANDROID_LOG_INFO, "ZygiskESP", "Garis ke musuh: Dari (%.1f, %.1f) menuju (%.1f, %.1f)", x1, y1, x2, y2);
 }
 
@@ -76,11 +77,12 @@ void EksekusiESPLine() {
     for (uint8_t team_id = 0; team_id <= 1; team_id++) {
         MonoArray* player_list = (MonoArray*)GetPlayerListFromTeamId(team_id);
         
-        if (player_list != nullptr && player_list->max_length > 0) {
+        // Proteksi pointer untuk mencegah game menutup paksa (Anti-FC)
+        if (player_list != nullptr && !((uintptr_t)player_list & 1) && player_list->max_length > 0 && player_list->max_length < 200) {
             for (int i = 0; i < player_list->max_length; i++) {
-                void* current_player = ((void**)player_list->vector)[i]; 
+                void* current_player = player_list->vector[i]; 
 
-                if (current_player != nullptr && current_player != local_player) {
+                if (current_player != nullptr && current_player != local_player && !((uintptr_t)current_player & 1)) {
                     Vector3 musuh_3d = get_Position(current_player);
                     Vector3 layar_2d = WorldToScreenPoint(main_camera, musuh_3d);
 
@@ -133,6 +135,9 @@ public:
         if (process_name && strcmp(process_name, "com.dts.freefiremax") == 0) {
             pthread_t t;
             pthread_create(&t, nullptr, LoopLatarBelakang, nullptr);
+            
+            // OPSIONAL: Jika ingin menyuntikkan file .so eksternal tambahan, aktifkan baris di bawah ini
+            // dlopen("/data/local/tmp/libESPline.so", RTLD_NOW);
         }
         env->ReleaseStringUTFChars(args->nice_name, process_name);
     }
