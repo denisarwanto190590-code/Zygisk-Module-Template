@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <cstring>
+#include <android/log.h>
 #include "zygisk.hpp"
 
 // =======================================================
@@ -15,15 +16,8 @@
 #define OFFSET_GET_LOCAL_PLAYER         0x64cbde8
 #define OFFSET_GET_PLAYER_LIST_TEAM     0x645d00c 
 
-#define OFFSET_GUI_DRAW_TEXTURE         0x1234567 
-
 struct Vector3 {
     float x, y, z;
-};
-
-struct Rect {
-    float x, y, width, height;
-    Rect(float x, float y, float w, float h) : x(x), y(y), width(w), height(h) {}
 };
 
 struct MonoArray {
@@ -44,7 +38,6 @@ Vector3 (*get_Position)(void*) = nullptr;
 int (*GetPlayerCount)() = nullptr;
 void* (*get_LocalPlayerEntity)() = nullptr;
 void* (*GetPlayerListFromTeamId)(uint8_t team) = nullptr;
-void (*DrawTexture)(Rect, void*, int, bool) = nullptr;
 
 uintptr_t dapatkan_base_memori() {
     uintptr_t addr = 0;
@@ -60,6 +53,14 @@ uintptr_t dapatkan_base_memori() {
         fclose(fp);
     }
     return addr;
+}
+
+// FUNGSI KHUSUS: Menggambar tanpa merusak thread internal game (Anti-FC)
+void GambarGarisESP(float x1, float y1, float x2, float y2) {
+    // Trik Zygisk: Kita salurkan titik koordinat ini ke logcat sistem atau canvas overlay.
+    // Jika template kamu sudah mendukung fungsi Canvas, panggil fungsinya di sini.
+    // Contoh: ImGui::GetBackgroundDrawList()->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), 0xFFFFFFFF, 2.0f);
+    __android_log_print(ANDROID_LOG_INFO, "ZygiskESP", "Garis ke musuh: Dari (%.1f, %.1f) menuju (%.1f, %.1f)", x1, y1, x2, y2);
 }
 
 void EksekusiESPLine() {
@@ -79,11 +80,7 @@ void EksekusiESPLine() {
             for (int i = 0; i < player_list->max_length; i++) {
                 void* current_player = ((void**)player_list->vector)[i]; 
 
-                if (current_player != nullptr) {
-                    if (current_player == local_player) {
-                        continue; 
-                    }
-
+                if (current_player != nullptr && current_player != local_player) {
                     Vector3 musuh_3d = get_Position(current_player);
                     Vector3 layar_2d = WorldToScreenPoint(main_camera, musuh_3d);
 
@@ -93,10 +90,8 @@ void EksekusiESPLine() {
                         float end_x = layar_2d.x;
                         float end_y = screen_height - layar_2d.y;
 
-                        if (DrawTexture) {
-                            Rect posisi_garis(start_x, end_y, 2.0f, start_y - end_y);
-                            DrawTexture(posisi_garis, nullptr, 0, true);
-                        }
+                        // PANGGIL FUNGSI OVERLAY GAMBAR DISINI
+                        GambarGarisESP(start_x, start_y, end_x, end_y);
                     }
                 }
             }
@@ -104,7 +99,8 @@ void EksekusiESPLine() {
     }
 }
 
-void* InisialisasiFungsi(void*) {
+// Looping thread latar belakang yang dimodifikasi agar aman dari FC
+void* LoopLatarBelakang(void*) {
     do {
         il2cpp_base = dapatkan_base_memori();
         usleep(500000); 
@@ -116,8 +112,12 @@ void* InisialisasiFungsi(void*) {
     GetPlayerCount = (int (*)()) (il2cpp_base + OFFSET_GET_PLAYER_COUNT);
     get_LocalPlayerEntity = (void* (*)()) (il2cpp_base + OFFSET_GET_LOCAL_PLAYER);
     GetPlayerListFromTeamId = (void* (*)(uint8_t)) (il2cpp_base + OFFSET_GET_PLAYER_LIST_TEAM);
-    DrawTexture = (void (*)(Rect, void*, int, bool)) (il2cpp_base + OFFSET_GUI_DRAW_TEXTURE);
 
+    while (true) {
+        // Eksekusi data koordinat secara berkala tanpa memicu crash engine gambar
+        EksekusiESPLine();
+        usleep(33000); // Sinkronisasi sekitar 30 FPS
+    }
     return nullptr;
 }
 
@@ -132,7 +132,7 @@ public:
         const char* process_name = env->GetStringUTFChars(args->nice_name, nullptr);
         if (process_name && strcmp(process_name, "com.dts.freefiremax") == 0) {
             pthread_t t;
-            pthread_create(&t, nullptr, InisialisasiFungsi, nullptr);
+            pthread_create(&t, nullptr, LoopLatarBelakang, nullptr);
         }
         env->ReleaseStringUTFChars(args->nice_name, process_name);
     }
